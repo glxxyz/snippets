@@ -1,0 +1,23 @@
+Table of Empirical Results for Temperature Series, GLS Regressions
+
+          ahat   that   bhat    t-hac  tstar  btild    t-ps
+jwb
+         0.4466  0      0.004095  9.741  12.57  0.004137  5.998 
+jwbenso
+         0.5941  0      0.004424  8.562  13.59  0.004499  6.225 
+wh
+         0.4259  0      0.005334  9.3    26     0.005334  4.529 
+vgl
+         0.4603  0      0.005192  8.089  23.42  0.00507  4.067 
+jp
+         0.6461  0      0.004378  7.306  10.5   0.003794  3.357 
+jobp(year)
+         0.6183  0      0.004284  7.834  9.888  0.003776  3.562 
+
+Critical values for test statistics.
+
+        t-hac  tstar   t-ps
+
+ 0.95   1.645  6.46   1.72  
+ 0.975  1.96   8.22   2.152 
+ 0.99   2.33   10.5   2.647 
