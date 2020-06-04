@@ -1,0 +1,5 @@
+# Tell github to ignore gauss files when determining this repository's language
+*.g linguist-detectable=false
+*.py linguist-detectable=false
+*.go linguist-detectable=true
+
