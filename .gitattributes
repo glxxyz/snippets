@@ -1,5 +1,6 @@
 # Tell github what to ignore when determining this repository's language: https://github.com/github/linguist
-vogelsang -linguist-detectable
+vogelsang/* -linguist-detectable
+*.g -linguist-detectable
 *.py -linguist-detectable
 *.go linguist-detectable
 
