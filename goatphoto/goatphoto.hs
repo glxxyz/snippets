@@ -26,6 +26,7 @@ main = do queryString <- safeGetEnv "QUERY_STRING" ""
               actualDirName = dirConcat [rootDirectory, directoryName]
               scriptName = valFromQuery "SCRIPT_NAME" query
               in do album <- albumFromDirectory ""
+                    ensureAllThumbnails album
                     wrapper (\env -> do return (Content{mime = buildGoatPhoto env
                                                                               directoryName
                                                                               album
@@ -61,7 +62,26 @@ outputImages scriptName (x:xs) =   (href (dirConcat [baseUrl, imagepath x]) [pro
                                  : br : (outputImages scriptName xs)
  
 
-
+ensureAllThumbnails :: Album -> IO ()
+ensureAllThumbnails album = let thumbNailDir = dirConcat [rootDirectory, subdirname album, "thumbnails"]
+                            in do ensureDirectory thumbNailDir
+                                  mapM (ensureImageHasThumbnail thumbNailDir) (images album)
+                                  mapM ensureAllThumbnails (subalbums album)
+                                  return ()
+                               
+ensureImageHasThumbnail :: FilePath -> Image -> IO ()
+ensureImageHasThumbnail thumbDir image = let imageNameAndPath = dirConcat [rootDirectory, imagepath image]
+                                             thumbNameAndPath = dirConcat [thumbDir, getLastSubdir (imagepath image)]
+                                             copyCommand = winDozeIfy ("copy \"" ++ imageNameAndPath ++ "\" \"" ++ thumbNameAndPath ++ "\"")
+                                             mogrifyCommand = winDozeIfy("mogrify -resize 150x150 \"" ++ thumbNameAndPath ++ "\"")
+                                         in do exists <- doesFileExist thumbNameAndPath
+                                               if exists
+                                                  then return ()
+                                                  else do putStr ("Executing: " ++ copyCommand ++ "\n")
+                                                          system copyCommand
+                                                          putStr ("Executing: " ++ mogrifyCommand ++ "\n")
+                                                          system mogrifyCommand
+                                                          return ()
             
 -- --------------------------------------------------------------------------------
 -- Main Data Strucuture
@@ -180,6 +200,9 @@ splitOnChar char input = (x, snd(splitAt 1 xs))
 splitOnChars :: String -> String -> (String, String)
 splitOnChars test input = (x, snd(splitAt 1 xs))
                           where (x, xs) = break (\a -> elem a test) input
+                          
+winDozeIfy :: String -> String
+winDozeIfy = map (\x -> if x == '/' then '\\' else x)
 
 -- --------------------------------------------------------------------------------
 -- CGI Stuff
@@ -200,3 +223,13 @@ parseQuery ""     = []
 parseQuery input  = splitOnEquals(x) : parseQuery xs
                     where (x, xs) = splitOnAmpersand input
                     
+                    
+-- -------------------------------------------------------------------------------
+-- WinWrapper
+
+ensureDirectory :: FilePath -> IO ()
+ensureDirectory pathName = do dirExists <- doesDirectoryExist pathName
+                              if dirExists
+                                 then return ()
+                                 else do createDirectory pathName
+                                         return ()
