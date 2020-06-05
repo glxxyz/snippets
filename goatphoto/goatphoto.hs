@@ -17,7 +17,7 @@ ignoreDirectories = [".", "..", "pages", ".xvpics", "images", "originals", "thum
 ignoreFiles = []
 imageExtensions = [".jpeg", ".jpg", ".gif", ".JPEG", ".JPG", ".GIF"]
 photosPerLine = 4 :: Int
-thumbnailDimensions = "100x100"
+thumbnailDimensions = "150x150"
 imageDimensions = "640x400"
 
 -- --------------------------------------------------------------------------------                                          
@@ -49,7 +49,10 @@ moveFile source dest = do system ("move \"" ++ (winDozeIfy source) ++ "\" \"" ++
 -- Main
 main :: IO ()
 main = do queryString <- safeGetEnv "QUERY_STRING" ""
-          putStr "Content-Type:text/html\n\n"
+          runMain queryString
+
+runMain queryString = 
+       do putStr "Content-Type:text/html\n\n"
           let query = parseQuery queryString
               photoName = valFromQuery "photo" query
               albumName = valFromQuery "album" query
@@ -71,10 +74,22 @@ buildXmlPhoto album photo =
              title = Xml "title" [] [Text ("GoatPhoto - " ++ (photodesc photo))]
              body = Xml "body" [] (buildPhotoBody album photo)
 
-buildPhotoBody album photo = [xml_hr] ++ albumNavigation ++ [xml_hr] 
+buildPhotoBody album photo = [xml_hr] ++ albumNavigation ++ [xml_hr]
                          ++ photoDisplay ++ [xml_hr] ++ [xml_emailLink]
                         where albumNavigation = [buildAlbumNavigation album]
-                              photoDisplay = [buildImage photo]
+                              photoDisplay = [Xml "table" [] rows]
+                              rows = [Xml "tr" [] cols]
+                              cols = [Xml "td" [("valign", "top")] [Text "Prev: "],
+                                      Xml "td" [("valign", "top")] [prevLink],
+                                      Xml "td" [("valign", "top")] [buildImage photo],
+                                      Xml "td" [("valign", "top")] [Text "Next: "],
+                                      Xml "td" [("valign", "top")] [nextLink]]
+                              prevLink = buildMaybeThumb (prevPhoto photo album)
+                              nextLink = buildMaybeThumb (nextPhoto photo album)
+
+buildMaybeThumb :: Maybe Photo -> XML
+buildMaybeThumb Nothing      = Text "[none]"
+buildMaybeThumb (Just photo) = buildThumbnail photo
 
 buildXmlAlbum album =
        Xml "html" [] [head, body]
@@ -155,7 +170,7 @@ getValidPhoto :: String -> String -> IO Photo
 getValidPhoto albumName photoName = do ensureOriginalValid albumName photoName
                                        ensureThumbValid albumName photoName
                                        ensureImageValid albumName photoName
-                                       return Photo{photodesc=prettyName photoName, -- for now
+                                       return Photo{photodesc=prettyName (removeExtension photoName), -- for now
                                                     photoname=photoName,
                                                     parentname=albumName,
                                                     parentalbumname=albumName,
@@ -204,10 +219,10 @@ getParentAlbums albumName = getParentAlbums' (trimLastSubdir albumName)
                                           return (parentAlbums ++ [thisAlbum])
                             
 ensureAlbumValid albumName = do sourceDirContents <- safeGetDirectoryContents sourcePath
-                                sourceFiles <- filterFiles sourcePath sourceDirContents                                
+                                sourceFiles <- filterFiles sourcePath sourceDirContents
                                 mapM (ensureOriginalValid albumName) (stripOutIgnoreFiles sourceFiles)
                                 originalDirContents <- safeGetDirectoryContents originalPath
-                                originalFiles <- filterFiles originalPath originalDirContents                                
+                                originalFiles <- filterFiles originalPath originalDirContents
                                 originalValidFiles <- return (stripOutIgnoreFiles originalFiles)
                                 mapM (ensureThumbValid albumName) originalValidFiles
                                 mapM (ensureImageValid albumName) originalValidFiles
@@ -260,6 +275,19 @@ stripOutIgnoreFiles [] = []
 stripOutIgnoreFiles (x:xs) = if (elem x ignoreFiles) || not (stringMatchesOneOf x imageExtensions)
                                       then stripOutIgnoreFiles xs
                                       else x : stripOutIgnoreFiles xs
+
+nextPhoto :: Photo -> Album -> Maybe Photo
+nextPhoto photo album = afterMatchingPhoto photo (photos album)
+
+prevPhoto :: Photo -> Album -> Maybe Photo
+prevPhoto photo album = afterMatchingPhoto photo (reverse (photos album))
+
+afterMatchingPhoto :: Photo -> [Photo] -> Maybe Photo
+afterMatchingPhoto _     []       = Nothing
+afterMatchingPhoto _     (x:[])   = Nothing
+afterMatchingPhoto photo (x:xs) = if (photoname photo) == (photoname x)
+                                      then Just (head xs)
+                                      else afterMatchingPhoto photo xs
 
 -- --------------------------------------------------------------------------------                                          
 -- xml output
@@ -374,7 +402,7 @@ ensureDirectory pathName = do dirExists <- doesDirectoryExist pathName
                                          return ()                       
 
 filterFiles :: FilePath -> [FilePath] -> IO [FilePath]
-filterFiles dir xs = do filterM (\x -> doesFileExist (dirConcat [dir, x])) xs
+filterFiles dir xs = filterM (\x -> doesFileExist (dirConcat [dir, x])) xs
 
 filterDirectories :: FilePath -> [FilePath] -> IO [FilePath]
 filterDirectories dir xs = filterM (\x -> doesDirectoryExist (dirConcat [dir, x])) xs
@@ -403,6 +431,11 @@ trimLastSubdir :: String -> String
 trimLastSubdir s = let reversed = reverse s
                        reversedSub = snd (splitOnSlash reversed)
                    in reverse reversedSub
+                   
+removeExtension :: String -> String
+removeExtension s = let reversed = reverse s
+                        reversedSub = snd (splitOnChar '.' reversed)
+                    in reverse reversedSub
 
                           
 
