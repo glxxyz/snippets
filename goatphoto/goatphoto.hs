@@ -13,11 +13,10 @@ import IOExtensions
 
 rootDirectory = "c:/Program Files/Apache Group/Apache2/htdocs/photos"
 rootUrl = "/photos"
-ignoreDirectories = [".", "..", "pages", ".xvpics", "images", "originals", "thumbnails"]
+ignoreDirectories = [".", "..", "pages", ".xvpics", "images", "originals", "thumbnails", "notused"]
 ignoreFiles = []
+albumsPerLine = 5 :: Int
 imageExtensions = [".jpeg", ".jpg", ".gif", ".JPEG", ".JPG", ".GIF"]
-photosPerLine = 4 :: Int
-thumbnailDimensions = "150x150"
 imageDimensions = "640x400"
 
 -- --------------------------------------------------------------------------------                                          
@@ -26,9 +25,17 @@ imageDimensions = "640x400"
 winDozeIfy :: String -> String
 winDozeIfy = replaceChar '/' '\\'
 
+-- This sequence creates an image whose minimum dimensions are at least 300x300,
+-- crops out the middle 300x300, and resizes to 125x125
 makeThumbnail :: FilePath -> IO ()
-makeThumbnail path = do system ("mogrify -resize " ++ thumbnailDimensions++ " \"" ++ (winDozeIfy path) ++ "\"")
+makeThumbnail path = do system ("mogrify -resize 300x300 " ++ imageName)
+                        system ("mogrify -resize \"300x<\" " ++ imageName)
+                        system ("mogrify -resize \"x300<\" " ++ imageName)
+                        system ("mogrify -gravity Center -crop 300x300+0+0 " ++ imageName)
+                        system ("mogrify -resize 125x125 " ++ imageName)
                         return ()
+                     where imageName = "\"" ++ (winDozeIfy path) ++ "\""
+                        
 
 makeImage :: FilePath -> IO ()
 makeImage path = do system ("mogrify -resize " ++ imageDimensions ++ " \"" ++ (winDozeIfy path) ++ "\"")
@@ -54,8 +61,14 @@ main = do queryString <- safeGetEnv "QUERY_STRING" ""
 runMain queryString = 
        do putStr "Content-Type:text/html\n\n"
           let query = parseQuery queryString
-              photoName = valFromQuery "photo" query
-              albumName = valFromQuery "album" query
+              unsafePhotoName = valFromQuery "photo" query
+              unsafeAlbumName = valFromQuery "album" query
+              albumName = if stringContains unsafeAlbumName ".."
+                             then ""
+                             else unsafeAlbumName
+              photoName = if stringContains unsafePhotoName ".."
+                             then ""
+                             else unsafePhotoName
               in if photoName /= ""
                  then do photo <- getValidPhoto albumName photoName
                          album <- getValidAlbum albumName
@@ -71,76 +84,107 @@ outputPage xml = putStr (render xml)
 buildXmlPhoto album photo =
        Xml "html" [] [head, body]
        where head = Xml "head" [] [title]
-             title = Xml "title" [] [Text ("GoatPhoto - " ++ (photodesc photo))]
-             body = Xml "body" [] (buildPhotoBody album photo)
+             title = Xml "title" [] [Text ("Goatpunch Photo Album - " ++ (albumdesc album) ++ " / " ++ (photodesc photo))]
+             body = Xml "body" [] [buildPhotoBody album photo]
 
-buildPhotoBody album photo = [xml_hr] ++ albumNavigation ++ [xml_hr]
-                         ++ photoDisplay ++ [xml_hr] ++ [xml_emailLink]
-                        where albumNavigation = [buildAlbumNavigation album]
-                              photoDisplay = [Xml "table" [] rows]
-                              rows = [Xml "tr" [] cols]
-                              cols = [Xml "td" [("valign", "top")] [Text "Prev: "],
-                                      Xml "td" [("valign", "top")] [prevLink],
-                                      Xml "td" [("valign", "top")] [buildImage photo],
-                                      Xml "td" [("valign", "top")] [Text "Next: "],
-                                      Xml "td" [("valign", "top")] [nextLink]]
-                              prevLink = buildMaybeThumb (prevPhoto photo album)
-                              nextLink = buildMaybeThumb (nextPhoto photo album)
+buildPhotoBody album photo = Xml "center" [] [maintable, xml_br, xml_emailLink]
+                        where maintable = Xml "table" [("border", "1"), ("cellspacing", "0"), ("cellpadding", "10"), ("width", "100%")] rows
+                              rows = [Xml "tr" [] cols,
+                                      Xml "tr" [] [Xml "td" [("valign", "top"), ("align", "middle")] prevLink],
+                                      Xml "tr" [] [Xml "td" [("valign", "top"), ("align", "middle")] nextLink]]
+                              cols = [Xml "td" [("valign", "top")] albumNavigation,
+                                      Xml "td" [("valign", "top"), ("rowspan", "3")] [buildImage photo]]
+                              albumNavigation = [buildAlbumNavigation album (Just photo)]
+                              prevLink = [Text "Previous: ", xml_br, xml_br, buildMaybeThumb (prevPhoto photo album)]
+                              nextLink = [Text "Next: ", xml_br, xml_br, buildMaybeThumb (nextPhoto photo album)]
 
 buildMaybeThumb :: Maybe Photo -> XML
-buildMaybeThumb Nothing      = Text "[none]"
+buildMaybeThumb Nothing      = Text ""
 buildMaybeThumb (Just photo) = buildThumbnail photo
 
 buildXmlAlbum album =
        Xml "html" [] [head, body]
        where head = Xml "head" [] [title]
-             title = Xml "title" [] [Text ("GoatPhoto - " ++ (albumdesc album))]
-             body = Xml "body" [] (buildAlbumBody album)
+             title = Xml "title" [] [Text ("Goatpunch Photo Album - " ++ (albumdesc album))]
+             body = Xml "body" [] [buildAlbumBody album]
              
-buildAlbumBody album =     [xml_hr] ++ albumNavigation ++ [xml_hr] 
-                        ++ photoDisplay ++ [xml_hr] ++ [xml_emailLink]
-                       where albumNavigation = [buildAlbumNavigation album]
-                             photoDisplay = buildThumbnailDisp (photos album)
-            
+buildAlbumBody album  = Xml "center" [] [maintable, xml_br, xml_emailLink]
+                        where maintable = Xml "table" [("border", "1"), ("cellspacing", "0"), ("cellpadding", "10"), ("width", "100%")] rows
+                              rows = [Xml "tr" [] cols]
+                              cols = [Xml "td" [("valign", "top")] albumNavigation,
+                                      Xml "td" [] ([Text (albumcaption album)] ++ albumCaptionIfHr ++ importAlbums ++ importAlbumsIfHr ++ photoDisplay)]
+                              albumCaptionIfHr = if (albumcaption album) == "" || importAlbums == [] || photoDisplay == []
+                                                    then []
+                                                    else [xml_hr]
+                              albumNavigation = [buildAlbumNavigation album Nothing]
+                              importAlbumsIfHr = if importAlbums == [] || photoDisplay == []
+                                                      then []
+                                                      else [xml_hr]
+                              importAlbums = buildImportAlbumDisp (importalbums album)
+                              photoDisplay = buildThumbnailDisp (photos album)
             
            
-buildAlbumNavigation album = navigateParentAlbums album (parentalbums album) 
-navigateParentAlbums album [] = Xml "ul" [] [listContents]
-                                where listContents = Xml "li" [] ([thisAlbum] ++ subAlbums)
-                                      thisAlbum = Xml "b" [] [albumLink album]
-                                      subAlbums = subAlbumList (subalbums album)
-navigateParentAlbums album (x:xs) = Xml "ul" [] [listContents]
-                                    where listContents = Xml "li" [] [albumLink x, subAlbums]
-                                          subAlbums = navigateParentAlbums album xs                                          
-subAlbumList []     = []
-subAlbumList albums = [Xml "ul" [] (navigateSubAlbums albums)]
+buildAlbumNavigation album maybePhoto = navigateParentAlbums album (parentalbums album) maybePhoto True
+navigateParentAlbums album [] maybePhoto isFirst
+                              = if isFirst
+                                   then Xml "dl" [] [Xml "dt" [] ([thisAlbum] ++ subAlbums)]
+                                   else Xml "ul" [] [Xml "li" [] ([thisAlbum] ++ subAlbums)]
+                                where thisAlbum = Xml "b" [] [albumLink album]
+                                      subAlbums = subAlbumList (subalbums album) maybePhoto
+navigateParentAlbums album (x:xs) maybePhoto isFirst
+                              = if isFirst
+                                   then Xml "dl" [] [Xml "dt" [] ([albumLink x, subAlbums])]
+                                   else Xml "ul" [] [Xml "li" [] ([albumLink x, subAlbums])]
+                                where subAlbums = navigateParentAlbums album xs maybePhoto False
+subAlbumList _      (Just photo) = [Xml "ul" [] [Xml "li" [] [Xml "i" [] [buildTextImageLink photo]]]]
+subAlbumList []     _            = []
+subAlbumList albums _            = [Xml "ul" [] (navigateSubAlbums albums)]
+
 navigateSubAlbums []     = []
 navigateSubAlbums (x:xs) = [Xml "li" [] [albumLink x]] ++ (navigateSubAlbums xs)
 
+
 buildThumbnailDisp []     = []
-buildThumbnailDisp photos = [Xml "table" [] (buildThumbnailRows photos)]
-buildThumbnailRows []     = []
-buildThumbnailRows photos = [Xml "tr" [] (buildThumbnailCols (take photosPerLine photos))] ++ (buildThumbnailRows (drop photosPerLine photos))
-buildThumbnailCols []     = []
-buildThumbnailCols (x:xs) = [Xml "td" [("valign","top")] ([buildThumbnail x] ++ (buildThumbnailCols xs))]
+buildThumbnailDisp (x:xs) = xml_nbsp : (buildThumbnail x) : (buildThumbnailDisp xs)
 
-buildThumbnail photo      = Xml "a" [("href", imagelink)] [image, xml_br, text]
+buildImportAlbumDisp []     = []
+buildImportAlbumDisp albums = [Xml "table" [("cellpadding", "5")] (buildImportAlbumRows albums)]
+buildImportAlbumRows []     = []
+buildImportAlbumRows albums = [Xml "tr" [] (buildImportAlbumCols (take albumsPerLine albums))] ++ (buildImportAlbumRows (drop albumsPerLine albums))
+buildImportAlbumCols []     = []
+buildImportAlbumCols (x:xs) = [Xml "td" [("valign","top"), ("align","middle")] ([buildImport x] ++ (buildImportAlbumCols xs))]
+
+buildTextImageLink photo  = Xml "a" [("href", imagelink)] [Text (photodesc photo)]
                             where imagelink = "?album=" ++ (parentalbumname photo) ++ "&photo=" ++ (photoname photo)
-                                  image = Xml "img" [("src", thumburl photo)] []
-                                  text = Text (photodesc photo)
 
-buildImage photo          = Xml "a" [("href", imagelink)] [image, xml_br, text]
-                            where imagelink = originalurl photo
-                                  image = Xml "img" [("src", imageurl photo)] []
+buildThumbnail photo      = Xml "a" [("href", imagelink)] [image]
+                            where imagelink = "?album=" ++ (parentalbumname photo) ++ "&photo=" ++ (photoname photo)
+                                  image = Xml "img" [("src", thumburl photo), ("alt", photodesc photo), ("border", "0")] []
+
+buildImage photo          = Xml "center" [] (photoCaptionWithHr ++ [link])
+                            where photoCaptionWithHr = if photocaption photo == ""
+                                                          then []
+                                                          else [Xml "p" [] [Text (photocaption photo)], xml_hr, xml_br]
+                                  link = Xml "a" [("href", imagelink)] [image, xml_br, xml_br, text]
+                                  imagelink = originalurl photo
+                                  image = Xml "img" [("src", imageurl photo), ("border", "0"), ("alt", "Click to view photo " ++ (photodesc photo) ++ " full-size")] []
                                   text = Text (photodesc photo)
+                                  
+                                  
+buildImport album         = Xml "a" [("href", imagelink)] [image, xml_br, xml_br, text]
+                            where imagelink = "?album=" ++ (albumname album)
+                                  image = Xml "img" [("src", thumburl photo), ("border", "0"), ("alt", "Click to view album " ++ (albumdesc album))] []
+                                  photo = head (photos album)
+                                  text = Text (albumdesc album)
 
 albumLink :: Album -> XML
-albumLink album@Album{albumname=""} = Xml "a" [("href", "?")] [Text "album"]
+albumLink album@Album{albumname=""} = Xml "a" [("href", "?")] [Text "Goatpunch Photo Album"]
 albumLink album                     = Xml "a" [("href", albumLink)] [Text (albumdesc album)]
                                       where albumLink = "?album=" ++ (albumname album)
 
 xml_hr = Xml "hr" [] []
 xml_br = Xml "br" [] []
+xml_nbsp = Text "&nbsp;"
 xml_emailLink = Xml "a" [("href", "mailto:alan@goatpunch.com")] [Text "alan@goatpunch.com"]
 
 -- --------------------------------------------------------------------------------
@@ -153,33 +197,32 @@ data Photo = Photo{photodesc   :: String,
                    originalurl :: String,
                    imageurl    :: String,
                    thumburl    :: String,
-                   caption     :: String,
-                   nextphoto   :: String,
-                   prevphoto   :: String}
-             deriving (Show)
+                   photocaption     :: String}
+             deriving (Read, Show)
 
 data Album = Album{albumdesc    :: String,
                    albumname    :: String,
                    subalbums    :: [Album],
                    parentalbums :: [Album],
-                   photos       :: [Photo]}
-             deriving (Show)
+                   importalbums :: [Album],
+                   photos       :: [Photo],
+                   albumcaption :: String}
+             deriving (Read, Show)
              
-
 getValidPhoto :: String -> String -> IO Photo             
 getValidPhoto albumName photoName = do ensureOriginalValid albumName photoName
                                        ensureThumbValid albumName photoName
                                        ensureImageValid albumName photoName
-                                       return Photo{photodesc=prettyName (removeExtension photoName), -- for now
+                                       realName <- getRealName albumName photoName
+                                       caption <- getCaption albumName photoName
+                                       return Photo{photodesc=realName,
                                                     photoname=photoName,
                                                     parentname=albumName,
                                                     parentalbumname=albumName,
                                                     originalurl=originalUrl,
                                                     imageurl=imageUrl,
                                                     thumburl=thumbUrl,
-                                                    caption="", -- for now
-                                                    nextphoto = "", --for now
-                                                    prevphoto = ""} -- for now
+                                                    photocaption=caption}
                                     where originalUrl  = dirConcat [rootUrl, albumName, "originals", photoName]
                                           imageUrl     = dirConcat [rootUrl, albumName, "images", photoName]
                                           thumbUrl     = dirConcat [rootUrl, albumName, "thumbnails", photoName]
@@ -193,22 +236,57 @@ getValidAlbum albumName = do ensureAlbumValid albumName
                              albums <- mapM getShellAlbum (map (\x -> dirConcat [albumName, x]) (stripOutIgnoreDirectories directories))
                              photos <- mapM (getValidPhoto albumName) (stripOutIgnoreFiles files)
                              parentAlbums <- getParentAlbums albumName
-                             return Album{albumdesc=prettyName (getLastSubdir albumName), -- for now
+                             realName <- getRealName (trimLastSubdir albumName) (getLastSubdir albumName)
+                             caption <- getCaption albumName "."
+                             importAlbums <- getImportAlbums albumName
+                             return Album{albumdesc=realName,
                                           albumname=albumName,
                                           subalbums=albums,
                                           parentalbums = parentAlbums,
-                                          photos=photos}
+                                          importalbums = importAlbums,
+                                          photos=photos,
+                                          albumcaption=caption}
                           where albumPathDir = dirConcat [rootDirectory, albumName]
-                                albumPathFiles = dirConcat [rootDirectory, albumName, "images"]
+                                albumPathFiles = dirConcat [rootDirectory, albumName, "originals"]
                                          
 getShellAlbum :: String -> IO Album
-getShellAlbum albumName = do return Album{albumdesc=prettyName (getLastSubdir albumName), -- for now
+getShellAlbum albumName = do realName <- getRealName (trimLastSubdir albumName) (getLastSubdir albumName)
+                             return Album{albumdesc=realName,
                                           albumname=albumName,
                                           subalbums=[],
                                           parentalbums = [],
-                                          photos=[]}
-                          where albumPath = dirConcat [rootDirectory, albumName]
+                                          importalbums = [],
+                                          photos=[],
+                                          albumcaption=""}
        
+getImportAlbums :: String -> IO [Album]
+getImportAlbums albumName = do imports <- getImports albumName
+                               mapM (getImportAlbum albumName) imports
+
+getImportAlbum :: String -> (String, String) -> IO Album
+getImportAlbum parentName (albumPath, photoPath) =
+                           do realName <- getRealName albumDir subAlbumName
+                              photo <- getValidPhoto photoDir photoName
+                              caption <- getCaption albumName "."
+                              return Album{albumdesc=realName,
+                                           albumname=albumName,
+                                           subalbums=[],
+                                           parentalbums = [],
+                                           importalbums = [],
+                                           photos=[photo],
+                                           albumcaption=caption}
+                           where albumDir = if head albumPath == '/'
+                                               then trimLastSubdir (removeLeadingSlash albumPath)
+                                               else dirConcat [parentName, trimLastSubdir albumPath]
+                                 subAlbumName = getLastSubdir albumPath
+                                 albumName = if head albumPath == '/'
+                                               then removeLeadingSlash albumPath
+                                               else dirConcat[parentName, albumPath]
+                                 photoDir = if head photoPath == '/'
+                                               then trimLastSubdir (removeLeadingSlash photoPath)
+                                               else dirConcat [parentName, trimLastSubdir photoPath]
+                                 photoName = getLastSubdir photoPath
+
 getParentAlbums :: String -> IO [Album]                   
 getParentAlbums [] = return []
 getParentAlbums albumName = getParentAlbums' (trimLastSubdir albumName)
@@ -225,7 +303,7 @@ ensureAlbumValid albumName = do sourceDirContents <- safeGetDirectoryContents so
                                 originalFiles <- filterFiles originalPath originalDirContents
                                 originalValidFiles <- return (stripOutIgnoreFiles originalFiles)
                                 mapM (ensureThumbValid albumName) originalValidFiles
-                                mapM (ensureImageValid albumName) originalValidFiles
+                                -- No real need for this is there? mapM (ensureImageValid albumName) originalValidFiles
                                 return ()
                              where sourcePath = dirConcat [rootDirectory, albumName]
                                    originalPath = dirConcat [rootDirectory, albumName, "originals"]
@@ -297,7 +375,18 @@ data XML =   Xml { tag :: String, attributes :: [(String,String)], contents :: [
            deriving (Show, Eq)
            
 render :: XML -> String
-render xml = render' 0 xml
+render xml = render' xml
+    where render' xml@Xml{contents=[]} = (openTag xml) ++ " />"
+          render' xml@Xml{contents}    = (openTag xml) ++ ">" ++ (rContents contents) ++ (closeTag xml)
+          render' Text{text} = text
+          render' Comment{text} = "<!-- " ++ text ++ " -->\n"
+          openTag xml = "<" ++ (tag xml) ++ (rAttributes (attributes xml))
+          closeTag xml = "</" ++ (tag xml) ++ ">\n"
+          rContents contents = foldl (\x y -> x ++ (render' y)) "" contents
+          rAttributes []            = []
+          rAttributes ((xn, xv):xs) = " " ++ xn ++ "=\"" ++ xv ++ "\"" ++ rAttributes xs
+          
+renderPretty xml = render' 0 xml
     where render' indent xml@Xml{contents=[]} = (openTag indent xml) ++ " />\n"
           render' indent xml@Xml{contents}    = (openTag indent xml) ++ ">\n" ++ (rContents indent contents) ++ (closeTag indent xml)
           render' indent Text{text} = (spaces indent) ++ text ++ "\n"
@@ -308,6 +397,9 @@ render xml = render' 0 xml
           rAttributes []            = []
           rAttributes ((xn, xv):xs) = " " ++ xn ++ "=\"" ++ xv ++ "\"" ++ rAttributes xs
           spaces indent = take indent (repeat ' ')
+
+-- Ultralight parser
+               
           
 -- --------------------------------------------------------------------------------
 -- html examples
@@ -344,9 +436,7 @@ valFromQuery p (x:xs) = if map toUpper (fst x) == map toUpper p
                         else valFromQuery p xs
 
 parseQuery :: String -> [(String, String)]
-parseQuery ""     = []
-parseQuery input  = splitOnEquals(x) : parseQuery xs
-                    where (x, xs) = splitOnAmpersand input
+parseQuery input  = map splitOnEquals (splitToListOnChar '&' input)
                     
 -- --------------------------------------------------------------------------------
 -- String helper
@@ -367,15 +457,18 @@ stringMatchesOneOf test (x:xs) = (stringContains test x) || (stringMatchesOneOf 
 splitOnEquals :: String -> (String, String)
 splitOnEquals = splitOnChar '='
                       
-splitOnAmpersand :: String -> (String, String)
-splitOnAmpersand = splitOnChar '&'
-                      
 splitOnSlash :: String -> (String, String)
 splitOnSlash = splitOnChar '/'
                       
 splitOnChar :: Char -> String -> (String, String)
 splitOnChar char input = (x, snd(splitAt 1 xs))
                          where (x, xs) = break (\a -> a == char) input
+                         
+splitToListOnChar :: Char -> String -> [String]
+splitToListOnChar _    []    = []
+splitToListOnChar char input = x : (splitToListOnChar char xs)
+                               where (x, xs) = splitOnChar char input
+
                          
 splitOnChars :: String -> String -> (String, String)
 splitOnChars test input = (x, snd(splitAt 1 xs))
@@ -385,6 +478,12 @@ replaceChar :: Char -> Char -> String -> String
 replaceChar oldChar newChar = map (\x -> if x == oldChar then newChar else x)
 
 prettyName = replaceChar '_' ' '
+
+trimLeadingWhitespace [] = []
+trimLeadingWhitespace (' ':xs) = trimTrailingWhitespace xs
+trimLeadingWhitespace xs = xs
+trimTrailingWhitespace xs = reverse (trimLeadingWhitespace (reverse xs))
+trimAllWhitespace xs = trimTrailingWhitespace (trimLeadingWhitespace xs)
 
 -- --------------------------------------------------------------------------------
 -- File manipulation
@@ -414,6 +513,9 @@ removeTrailingSlash path =
                  '/'  -> removeTrailingSlash (take ((length path)-1) path)
                  _    -> path
                  
+removeLeadingSlash ('/':xs) = removeLeadingSlash xs
+removeLeadingSlash xs       = xs
+                 
 addTrailingSlash :: String -> String
 addTrailingSlash path = (removeTrailingSlash path) ++ "/"
 
@@ -425,19 +527,46 @@ dirConcat (x:xs)  = removeTrailingSlash((addTrailingSlash x) ++ (dirConcat xs))
 getLastSubdir :: String -> String
 getLastSubdir s = let reversed = reverse s
                       reversedSub = fst (splitOnSlash reversed)
-                  in reverse reversedSub
+                      in reverse reversedSub
 
 trimLastSubdir :: String -> String
 trimLastSubdir s = let reversed = reverse s
                        reversedSub = snd (splitOnSlash reversed)
-                   in reverse reversedSub
+                       in reverse reversedSub
                    
 removeExtension :: String -> String
 removeExtension s = let reversed = reverse s
                         reversedSub = snd (splitOnChar '.' reversed)
-                    in reverse reversedSub
+                        in if reversedSub == []
+                              then s
+                              else reverse reversedSub
+           
+getRealName :: String -> String -> IO String         
+getRealName albumName subName = do realNames <- getRealNames albumName
+                                   let res = lookup subName realNames
+                                       in case res of
+                                               Nothing -> return (prettyName (removeExtension subName)) -- best we can do
+                                               Just name -> return name
 
-                          
+getCaption :: String -> String -> IO String         
+getCaption albumName subName = do captions <- getCaptions albumName
+                                  let caption = lookup subName captions
+                                      in case caption of
+                                              Nothing -> do return []
+                                              Just caption -> return caption
 
-                    
-                    
+getRealNames :: String -> IO [(String, String)]
+getRealNames albumName = readDBFile (dirConcat [rootDirectory, albumName, "desc.txt"])
+                                   
+getCaptions :: String -> IO [(String, String)]
+getCaptions albumName = readDBFile (dirConcat [rootDirectory, albumName, "caption.txt"])
+                                   
+getImports :: String -> IO [(String, String)]
+getImports albumName = readDBFile (dirConcat [rootDirectory, albumName, "import.txt"])
+                                   
+readDBFile :: String -> IO [(String, String)]
+readDBFile fileName = do fileExists <- doesFileExist fileName
+                         if fileExists
+                            then do contents <- readFile fileName
+                                    return (map splitOnEquals (splitToListOnChar '\n' contents))
+                               else return []
