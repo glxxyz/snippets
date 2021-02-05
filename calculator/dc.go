@@ -108,13 +108,13 @@ func getToken() tokenValue {
 	case ';',
 		'\n':
 		currTok = PRINT
-	case '*',
-		'/',
-		'+',
-		'-',
-		'(',
-		')',
-		'=':
+	case MUL,
+		DIV,
+		PLUS,
+		MINUS,
+		LP,
+		RP,
+		ASSIGN:
 		currTok = tokenValue(ch)
 	case '0', '1', '2', '3', '4',
 		'5', '6', '7', '8', '9',
